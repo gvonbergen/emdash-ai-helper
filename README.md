@@ -169,19 +169,17 @@ pnpm run build      # dist/plugin.mjs, dist/manifest.json, dist/index.mjs
 pnpm run test:git-install  # prove the private git-dependency contract end to end
 ```
 
-The test suite is fully mocked: no real credentials are used and no content is
-transmitted to any external service. The lifecycle tests run through EmDash's
-production sandbox transport (`@emdash-cms/plugin-test`), including user
-description precedence, empty entries, endpoint failures, output validation,
-publish retries, and token-leak checks.
+The `pnpm run test` suite is fully mocked: no real credentials are used and no
+content is transmitted to any external service. The lifecycle tests run through
+EmDash's production sandbox transport (`@emdash-cms/plugin-test`), including
+user description precedence, empty entries, endpoint failures, output
+validation, publish retries, and token-leak checks. The separate
+`pnpm run test:git-install` integration check uses a temporary local git
+remote, but it resolves build dependencies from the npm registry and therefore
+requires network access; it uses no real GitHub credentials.
 
 ## Private distribution
 
 This repository is private and is **not** published to the EmDash plugin
-registry. It is distributed as a pinned git dependency: package managers build
-`dist/` from source through the `prepare` script at install time, and git-
-connected builds consume it with a scoped, read-only GitHub credential. The
-full contract — pinned refs, pnpm build-script allowlisting, and the Cloudflare
-Workers Builds secret setup — is documented in
-`docs/private-git-dependency.md`; the tag-based release process lives in
-`docs/release.md`.
+registry. See `docs/private-git-dependency.md` for the install and credential
+contract, and `docs/release.md` for the tag-based release process.

@@ -8,8 +8,9 @@ registry and never published to npm, so releases are git tags.
 
 1. Land the changes on the default branch through a reviewed pull request.
 2. Bump `version` in `package.json` and add a `CHANGELOG.md` entry in the same
-   pull request (keep `private: true` — it is a guard against accidental
-   publication).
+   pull request. Keep `private: true` to prevent accidental npm publication,
+   and leave the manifest `publisher` DID as a placeholder to prevent accidental
+   EmDash registry publication.
 3. After merge, the maintainer creates an annotated tag on the merge commit:
 
    ```sh
@@ -39,7 +40,4 @@ registry and never published to npm, so releases are git tags.
 
 ## History
 
-- **0.2.0** — First git-dependency release: added the `prepare` script so the
-  package builds `dist/` at install time, and documented private
-  build-credential setup (`docs/private-git-dependency.md`).
-- **0.1.0** — Initial plugin (sandboxed, not distributed as a git dependency).
+Release history is recorded in `CHANGELOG.md`.

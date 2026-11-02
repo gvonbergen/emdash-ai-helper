@@ -36,7 +36,7 @@ contract; keep script execution enabled for your install step.
 ### pnpm build-script gating
 
 pnpm gates dependency lifecycle scripts. A git-hosted dependency's `prepare`
-requires explicit `allowBuilds` approval on every supported pnpm version,
+requires explicit `allowBuilds` approval on every pnpm version listed below,
 independently of `strictDepBuilds`. `strictDepBuilds` only controls how pnpm
 treats other blocked dependency build scripts; it does not approve this
 `prepare`. The accepted `allowBuilds` key depends on the pnpm version:
@@ -50,8 +50,7 @@ treats other blocked dependency build scripts; it does not approve this
   full resolved-SHA form. A tag-qualified key is not accepted because pnpm
   checks the resolved git artifact.
 
-This repository declares pnpm 12.16.1, so its supported consumer configuration
-is:
+For the pinned pnpm 12.16.1, use this consumer configuration:
 
 ```yaml
 # pnpm-workspace.yaml of the consumer
