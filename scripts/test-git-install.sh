@@ -68,6 +68,7 @@ cat >"$tmp/consumer/package.json" <<EOF
 	"name": "emdash-ai-helper-git-install-fixture",
 	"private": true,
 	"type": "module",
+	"packageManager": "pnpm@12.16.1",
 	"dependencies": {
 		"emdash-ai-helper": "git+file://$tmp/emdash-ai-helper.git#v0.2.0"
 	}
@@ -82,6 +83,13 @@ dangerouslyAllowAllBuilds: false
 allowBuilds:
   "emdash-ai-helper@git+file://$tmp/emdash-ai-helper.git": true
 EOF
+
+expected_pnpm_version="12.16.1"
+actual_pnpm_version="$(cd "$tmp/consumer" && pnpm --version)"
+if [ "$actual_pnpm_version" != "$expected_pnpm_version" ]; then
+	echo "FAIL: expected pnpm $expected_pnpm_version, got $actual_pnpm_version" >&2
+	exit 1
+fi
 
 echo "==> running clean pnpm install (must run the dependency's prepare script)"
 ( cd "$tmp/consumer" && pnpm install )
@@ -117,7 +125,60 @@ assert.deepEqual(
 	new Set(["content:read", "content:write", "network:request"]),
 );
 const runtime = await import("emdash-ai-helper/sandbox");
-assert.ok(runtime.default, "sandbox runtime must default-export the plugin");
+const plugin = runtime.default;
+assert.ok(plugin, "sandbox runtime must default-export the plugin");
+assert.deepEqual(Object.keys(plugin.hooks).sort(), ["content:afterPublish", "page:metadata"]);
+const publishHook = plugin.hooks["content:afterPublish"];
+assert.equal(typeof publishHook.handler, "function");
+assert.equal(publishHook.errorPolicy, "continue");
+assert.equal(typeof plugin.hooks["page:metadata"], "function");
+
+let auditOutcome;
+await publishHook.handler(
+	{ collection: "posts", content: { id: "entry-1" } },
+	{
+		settings: { get: async () => null },
+		storage: {
+			audit: {
+				put: async (_id, record) => {
+					auditOutcome = record.outcome;
+				},
+			},
+		},
+		log: { warn: () => {} },
+	},
+);
+assert.match(auditOutcome, /^config:/);
+
+assert.deepEqual(Object.keys(plugin.routes).sort(), ["diagnostics", "test-endpoint"]);
+for (const [name, methods] of [
+	["diagnostics", ["GET"]],
+	["test-endpoint", ["POST"]],
+]) {
+	const route = plugin.routes[name];
+	assert.deepEqual(route.methods, methods);
+	assert.equal(route.permission, "plugins:manage");
+	assert.equal(typeof route.handler, "function");
+}
+
+const diagnostics = await plugin.routes.diagnostics.handler(
+	{ input: {} },
+	{
+		settings: { get: async () => null },
+		storage: {
+			generations: { query: async () => ({ items: [], hasMore: false }) },
+		},
+	},
+);
+assert.equal(diagnostics.ok, true);
+assert.equal(diagnostics.configured, false);
+assert.deepEqual(diagnostics.recent, []);
+
+const probe = await plugin.routes["test-endpoint"].handler(
+	{},
+	{ settings: { get: async () => null } },
+);
+assert.equal(probe.ok, false);
 
 // The built manifest must agree with the descriptor trust contract.
 const pkgDist = dirname(fileURLToPath(import.meta.resolve("emdash-ai-helper")));

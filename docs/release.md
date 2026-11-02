@@ -18,8 +18,10 @@ registry and never published to npm, so releases are git tags.
    ```
 
 4. Consumers (for example Swissglam staging) move their git-dependency ref to
-   the new tag (or a freshly resolved commit SHA) and run one install to pick
-   up the rebuild through `prepare`.
+   the new tag (or a freshly resolved commit SHA) in `package.json`, run
+   `pnpm install` to regenerate `pnpm-lock.yaml`, and commit both files. The
+   refreshed lockfile is required before the consumer's frozen install can
+   resolve the new ref and rebuild the package through `prepare`.
 
 ## Versioning rules
 

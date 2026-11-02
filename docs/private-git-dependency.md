@@ -66,7 +66,9 @@ per the release process in `docs/release.md` (for example `v0.2.0`):
 ```
 
 Commit-SHA pins (as produced by `pnpm update` on a git dependency) are equally
-valid; they just need a manual bump per release.
+valid; they just need a manual bump per release. Whenever a pin changes,
+regenerate the consumer's `pnpm-lock.yaml` with `pnpm install` and commit the
+updated lockfile before using `--frozen-lockfile`.
 
 ## Build-time access to the private repository
 
@@ -101,7 +103,7 @@ For **Cloudflare Workers Builds** (git-connected staging/production builds):
 
   ```sh
   git config --global \
-    'url.https://x-access-token:$EMDASH_AI_HELPER_GITHUB_TOKEN@github.com/gvonbergen/emdash-ai-helper.insteadOf' \
+    "url.https://x-access-token:${EMDASH_AI_HELPER_GITHUB_TOKEN}@github.com/gvonbergen/emdash-ai-helper.insteadOf" \
     'https://github.com/gvonbergen/emdash-ai-helper' \
   && pnpm install --frozen-lockfile \
   && pnpm build
