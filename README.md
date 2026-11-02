@@ -14,6 +14,12 @@ Editors keep full control: a description typed by a human is never overwritten.
   plugin does nothing and records `manual-description` in its diagnostics.
   The same re-check runs immediately before saving, so a description typed while
   a generation was in flight always wins.
+- **Panel detection reads the schema, not the entry.** EmDash returns an entry's
+  `seo` block only when that entry already has a SEO row, so a migrated post and
+  a brand-new draft hand the plugin no block at all. A missing block is read as
+  "no description yet" and generation proceeds; only the collection's own
+  `hasSeo` flag (via `ctx.schema.getCollection`) can report the panel as
+  disabled, and that is recorded as `seo-disabled`.
 - **Publish safety.** Generation runs as deferred work after the publish
   transaction. A broken endpoint, a timeout, or a validation failure can never
   fail or roll back a publish; the entry stays live and the failure is recorded.
@@ -148,6 +154,7 @@ Both routes require the `plugins:manage` permission.
 | No token / invalid endpoint / disabled | Skipped with a `config:*` diagnostic |
 | Entry has no text to summarise | Skipped with an `empty-source` diagnostic |
 | Collection has no SEO panel | Skipped with an `seo-disabled` diagnostic |
+| Entry has no SEO row yet (migrated post, new draft) | Generated like any other empty description; the panel flag is read from the collection schema |
 | A generation is already in flight | Skipped with a `generation-in-flight` diagnostic; stale guards (older than 5 minutes) are retaken |
 | This source is already described / skipped / exhausted / cooling down | Skipped with the matching explicit diagnostic (`already-generated`, `previously-skipped`, `attempts-exhausted`, `retry-cooldown`) |
 | Timeout or unreachable endpoint | Recorded; retried on a later publish within the attempt budget |
@@ -161,7 +168,9 @@ Diagnostics are readable in the EmDash server logs and through the
 
 ## Limitations
 
-- Only entries in collections with the SEO panel enabled are described.
+- Only entries in collections with the SEO panel enabled are described. A
+  collection whose `hasSeo` flag cannot be read is treated as panel-enabled, so
+  an unreadable schema never silently disables generation site-wide.
 - One description per entry; regeneration happens only when the source text,
   model, or length contract changes.
 - The generated text is as good as the configured model; the plugin validates
