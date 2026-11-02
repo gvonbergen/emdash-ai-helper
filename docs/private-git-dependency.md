@@ -41,17 +41,19 @@ pnpm gates dependency lifecycle scripts. Verified behaviour:
 - **pnpm ≥ 12** with the default strict build policy
   (`strictDepBuilds`, as this repository itself uses) refuses with
   `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` until the dependency is allowlisted.
-  For git-hosted packages the `allowBuilds` key must be the **full dependency
-  spec**, not the bare package name:
+  For git-hosted packages the `allowBuilds` key must include the **package name
+  and repository**, but must not include the tag or commit ref:
 
   ```yaml
   # pnpm-workspace.yaml of the consumer
   allowBuilds:
-    "emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git#v0.2.0": true
+    "emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git": true
   ```
 
-  The key must match the pinned ref, so bumping the ref (a new release tag or
-  commit SHA) also updates this key.
+  pnpm resolves the pinned tag or commit SHA before checking whether the git
+  dependency may run `prepare`, and matches the hashless repository rule above.
+  The same key therefore approves both tag and SHA pins; update it only when the
+  repository URL changes.
 
 ## Pinned references
 

@@ -7,7 +7,7 @@
 #
 #   1. bare-clone the committed HEAD into a throwaway remote
 #   2. create a fixture consumer with a strict build-script policy that
-#      depends on `git+file://<remote>#<sha>`
+#      depends on `git+file://<remote>#v0.2.0`
 #   3. run a clean `pnpm install` (which must run our `prepare` script and
 #      build dist/ from source)
 #   4. assert the installed package is consumable: dist/ exists, src/ is not
@@ -59,6 +59,7 @@ git bundle create "$tmp/source.bundle" HEAD
 git init --quiet --bare "$tmp/emdash-ai-helper.git"
 git -C "$tmp/emdash-ai-helper.git" fetch --quiet "$tmp/source.bundle" "HEAD:refs/heads/task"
 git -C "$tmp/emdash-ai-helper.git" symbolic-ref HEAD refs/heads/task
+git -C "$tmp/emdash-ai-helper.git" tag v0.2.0 "$sha"
 
 echo "==> creating fixture consumer with strict build-script policy"
 mkdir "$tmp/consumer"
@@ -68,18 +69,18 @@ cat >"$tmp/consumer/package.json" <<EOF
 	"private": true,
 	"type": "module",
 	"dependencies": {
-		"emdash-ai-helper": "git+file://$tmp/emdash-ai-helper.git#$sha"
+		"emdash-ai-helper": "git+file://$tmp/emdash-ai-helper.git#v0.2.0"
 	}
 }
 EOF
 # Mirror a consumer that gates dependency build scripts (like Swissglam on
 # pnpm 12 with strictDepBuilds does): the git dependency must be allowlisted
-# by its full spec (bare package names do not match git deps).
+# by its hashless repository spec (bare package names do not match git deps).
 cat >"$tmp/consumer/pnpm-workspace.yaml" <<EOF
 strictDepBuilds: true
 dangerouslyAllowAllBuilds: false
 allowBuilds:
-  "emdash-ai-helper@git+file://$tmp/emdash-ai-helper.git#$sha": true
+  "emdash-ai-helper@git+file://$tmp/emdash-ai-helper.git": true
 EOF
 
 echo "==> running clean pnpm install (must run the dependency's prepare script)"
