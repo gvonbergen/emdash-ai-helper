@@ -1,0 +1,36 @@
+{
+	"name": "emdash-ai-helper",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@12.16.1",
+	"main": "dist/index.mjs",
+	"exports": {
+		".": {
+			"import": "./dist/index.mjs",
+			"types": "./dist/index.d.mts"
+		},
+		"./sandbox": "./dist/plugin.mjs"
+	},
+	"files": ["dist", "emdash-plugin.jsonc", "docs"],
+	"scripts": {
+		"validate": "emdash-plugin validate",
+		"build": "emdash-plugin build",
+		"dev": "emdash-plugin dev",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"test:unit": "vitest run tests/describe.test.ts tests/config.test.ts tests/text.test.ts",
+		"test:lifecycle": "vitest run tests/publish-lifecycle.test.ts",
+		"bundle": "emdash-plugin bundle"
+	},
+	"peerDependencies": {
+		"emdash": ">=1.4.0 <2.0.0"
+	},
+	"devDependencies": {
+		"@emdash-cms/plugin-cli": "0.13.5",
+		"@emdash-cms/plugin-test": "0.2.11",
+		"emdash": "1.4.0",
+		"typescript": "5.9.3",
+		"vitest": "4.1.12"
+	}
+}

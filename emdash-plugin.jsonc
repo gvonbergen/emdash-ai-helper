@@ -1,0 +1,108 @@
+{
+	// Identity. Replace `publisher` with your own Atmosphere account DID before
+	// publishing this package to the EmDash registry.
+	"$schema": "./node_modules/@emdash-cms/plugin-cli/schemas/emdash-plugin.schema.json",
+	"slug": "emdash-ai-helper",
+	"publisher": "did:plc:replace-with-your-account-did",
+	"name": "EmDash AI Helper",
+	"description": "Writes a meta description from the article text when an entry is published without one.",
+	"license": "MIT",
+	"author": { "name": "EmDash AI Helper contributors" },
+	"security": { "email": "security@example.com" },
+	"keywords": ["seo", "meta-description", "ai"],
+
+	// Trust contract.
+	//   content:read  - read the published entry, its locale, and its SEO panel.
+	//   content:write - save the generated description into the SEO panel.
+	//   network:request - call the configured endpoint, restricted to allowedHosts.
+	// No hook-policy capability is declared: this plugin never blocks a publish.
+	"capabilities": ["content:read", "content:write", "network:request"],
+
+	// OpenAI-compatible chat-completions providers. EmDash enforces this list
+	// at the network boundary; the plugin validates the configured endpoint
+	// against the same list so a misconfiguration fails as a readable setup
+	// error instead of a network error.
+	"allowedHosts": [
+		"api.openai.com",
+		"api.groq.com",
+		"api.together.xyz",
+		"api.deepinfra.com",
+		"api.fireworks.ai",
+		"api.mistral.ai",
+		"openrouter.ai",
+		"generativelanguage.googleapis.com"
+	],
+
+	"storage": {
+		// One record per (entry, source-text hash). Gives publish retries their
+		// idempotency: an already-described text is never sent twice.
+		"generations": {
+			"indexes": ["updatedAt", "status", ["collection", "contentId"]],
+			"uniqueIndexes": ["dedupeKey"]
+		},
+		// Append-only diagnostics for skipped outcomes (manual description, SEO
+		// panel disabled, empty text, incomplete configuration).
+		"audit": {
+			"indexes": ["at", "outcome", ["collection", "contentId"]]
+		},
+		// Fallback channel: generated descriptions served through `page:metadata`
+		// when the SEO-panel write is unavailable on the current runner.
+		"descriptions": { "indexes": [] }
+	},
+
+	"admin": {
+		"settingsSchema": {
+			"enabled": {
+				"type": "boolean",
+				"label": "Generate meta descriptions on publish",
+				"default": true
+			},
+			"endpoint": {
+				"type": "url",
+				"label": "Chat completions endpoint",
+				"description": "Full URL ending in /chat/completions, or a base such as https://api.openai.com/v1. HTTPS only.",
+				"default": "https://api.openai.com/v1/chat/completions"
+			},
+			"model": {
+				"type": "string",
+				"label": "Model",
+				"default": "gpt-4o-mini"
+			},
+			"apiKey": {
+				"type": "secret",
+				"label": "API token",
+				"description": "Stored encrypted by EmDash. Never shown again, logged, or returned by any route."
+			},
+			"minLength": {
+				"type": "number",
+				"label": "Minimum length (characters)",
+				"default": 70,
+				"min": 40,
+				"max": 160
+			},
+			"maxLength": {
+				"type": "number",
+				"label": "Maximum length (characters)",
+				"default": 160,
+				"min": 70,
+				"max": 320
+			},
+			"timeoutMs": {
+				"type": "number",
+				"label": "Request timeout (milliseconds)",
+				"default": 8000,
+				"min": 1000,
+				"max": 20000
+			},
+			"maxAttempts": {
+				"type": "number",
+				"label": "Retries per entry after a transient failure",
+				"default": 3,
+				"min": 1,
+				"max": 10
+			}
+		}
+	},
+
+	"repo": "https://github.com/gvonbergen/emdash-ai-helper"
+}
