@@ -65,10 +65,12 @@ per the release process in `docs/release.md` (for example `v0.2.0`):
 "emdash-ai-helper": "git+https://github.com/gvonbergen/emdash-ai-helper.git#v0.2.0"
 ```
 
-Commit-SHA pins (as produced by `pnpm update` on a git dependency) are equally
-valid; they just need a manual bump per release. Whenever a pin changes,
-regenerate the consumer's `pnpm-lock.yaml` with `pnpm install` and commit the
-updated lockfile before using `--frozen-lockfile`.
+Commit-SHA pins are equally valid when chosen manually. `pnpm update` keeps a
+declared tag, branch, or version range in `package.json` and records the commit
+it resolves in `pnpm-lock.yaml`; it does not rewrite the manifest to a SHA.
+Whenever a pin changes, regenerate the consumer's `pnpm-lock.yaml` with
+`pnpm install` and commit the updated lockfile before using
+`--frozen-lockfile`.
 
 ## Build-time access to the private repository
 
