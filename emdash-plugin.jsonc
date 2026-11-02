@@ -1,6 +1,6 @@
 {
-	// Identity. Replace `publisher` with your own Atmosphere account DID before
-	// publishing this package to the EmDash registry.
+	// Identity. This package is distributed privately and is not published to
+	// the EmDash registry, so `publisher` remains a placeholder.
 	"$schema": "./node_modules/@emdash-cms/plugin-cli/schemas/emdash-plugin.schema.json",
 	"slug": "emdash-ai-helper",
 	"publisher": "did:plc:replace-with-your-account-did",

@@ -46,7 +46,9 @@ The `diagnostics` admin route reports which channel is active
 
 ## Setup
 
-1. Install the plugin package in your EmDash site and register it:
+1. Install the plugin package in your EmDash site and register it (the package
+   is also consumable from a private git repository — see
+   `docs/private-git-dependency.md`):
 
    ```ts
    // astro.config.mjs
@@ -164,10 +166,20 @@ pnpm run validate   # manifest check
 pnpm run typecheck  # strict TypeScript
 pnpm run test       # unit tests + sandboxed publish-lifecycle tests (workerd)
 pnpm run build      # dist/plugin.mjs, dist/manifest.json, dist/index.mjs
+pnpm run test:git-install  # prove the private git-dependency contract end to end
 ```
 
-The test suite is fully mocked: no real credentials are used and no content is
-transmitted to any external service. The lifecycle tests run through EmDash's
-production sandbox transport (`@emdash-cms/plugin-test`), including user
-description precedence, empty entries, endpoint failures, output validation,
-publish retries, and token-leak checks.
+The `pnpm run test` suite is fully mocked: no real credentials are used and no
+content is transmitted to any external service. The lifecycle tests run through
+EmDash's production sandbox transport (`@emdash-cms/plugin-test`), including
+user description precedence, empty entries, endpoint failures, output
+validation, publish retries, and token-leak checks. The separate
+`pnpm run test:git-install` integration check uses a temporary local git
+remote, but it resolves build dependencies from the npm registry and therefore
+requires network access; it uses no real GitHub credentials.
+
+## Private distribution
+
+This repository is private and is **not** published to the EmDash plugin
+registry. See `docs/private-git-dependency.md` for the install and credential
+contract, and `docs/release.md` for the tag-based release process.
