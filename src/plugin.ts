@@ -37,6 +37,7 @@ import type { SandboxedPlugin } from "emdash/plugin";
 import { describeConfig, resolveConfig, type EndpointConfig } from "./lib/config.js";
 import { buildPrompt, describeOutput } from "./lib/describe.js";
 import { requestDescription, safeFailureText } from "./lib/openai.js";
+import { generationRecordId } from "./lib/record.js";
 import { extractSourceText } from "./lib/text.js";
 
 type GenerationStatus = "running" | "generated" | "skipped" | "failed";
@@ -68,6 +69,47 @@ interface DescriptionRecord {
 }
 
 const PUBLISH_HOOK_TIMEOUT_MS = 15_000;
+
+/**
+ * Age at which an in-flight guard or a `running` generation record is treated
+ * as abandoned. The publish hook itself times out after
+ * PUBLISH_HOOK_TIMEOUT_MS, so anything still held beyond this bound belongs
+ * to a hook instance that was hard-killed before it could release or finish.
+ * Recovery keeps one aborted run from suppressing every future publish.
+ */
+const ABANDONED_RUN_MS = 5 * 60_000;
+
+/**
+ * Why a publish did not request a generation. Every silent-return path now
+ * carries an explicit reason that is written to the audit store and logs so
+ * administrators can see exactly why nothing was generated.
+ */
+type SkipReason =
+	| "generation-in-flight"
+	| "guard-race-lost"
+	| "claim-race-lost"
+	| "already-generated"
+	| "previously-skipped"
+	| "run-in-progress"
+	| "attempts-exhausted"
+	| "retry-cooldown";
+
+const SKIP_REASONS: Record<SkipReason, string> = {
+	"generation-in-flight": "another generation is already in flight",
+	"guard-race-lost": "another publish won the guard race",
+	"claim-race-lost": "another publish claimed this source",
+	"already-generated": "this source was already described",
+	"previously-skipped": "an earlier publish already skipped this source",
+	"run-in-progress": "a generation run is already claimed for this source",
+	"attempts-exhausted": "the retry budget for this source is exhausted",
+	"retry-cooldown": "a failed attempt is still within its retry cooldown",
+};
+
+function guardAgeSeconds(at: unknown, nowMs: number): number | null {
+	if (typeof at !== "string") return null;
+	const parsed = Date.parse(at);
+	return Number.isFinite(parsed) ? Math.max(0, Math.round((nowMs - parsed) / 1000)) : null;
+}
 
 /**
  * The subset of EmDash's `StorageCollection` this plugin uses, typed for the
@@ -111,32 +153,43 @@ function hasText(value: unknown): boolean {
 	return typeof value === "string" && value.trim() !== "";
 }
 
-async function sha256Hex(value: string): Promise<string> {
-	const bytes = new TextEncoder().encode(value);
-	const digest = await crypto.subtle.digest("SHA-256", bytes);
-	return Array.from(new Uint8Array(digest))
-		.map((byte) => byte.toString(16).padStart(2, "0"))
-		.join("");
-}
-
 /**
  * Decide whether a publish of this content hash should call the endpoint.
  *
- * `reuse` is the answer for the common publish-retry case: the entry has
- * already been described, is being described right now, or has exhausted its
- * retry budget, so no request is sent and no cost is incurred.
+ * `reuse` covers the common publish-retry cases: the entry has already been
+ * described, is being described right now, or has exhausted its retry budget,
+ * so no request is sent and no cost is incurred. A `running` record older
+ * than ABANDONED_RUN_MS belongs to a hook instance that died before it could
+ * finish, so the request is allowed again instead of suppressing this entry
+ * forever. Every negative answer carries an explicit skip reason.
  */
 function shouldRequest(
 	record: GenerationRecord | undefined,
 	config: EndpointConfig,
 	nowMs: number,
-): boolean {
-	if (!record) return true;
-	if (record.status !== "failed") return false;
-	if (record.attempts >= config.maxAttempts) return false;
+): { request: boolean; reason?: SkipReason; recoveredRun?: boolean } {
+	if (!record) return { request: true };
+	if (record.status === "running") {
+		const started = Date.parse(record.updatedAt);
+		if (Number.isFinite(started) && nowMs - started < ABANDONED_RUN_MS) {
+			return { request: false, reason: "run-in-progress" };
+		}
+		// Stuck claim: a previous hook instance never reached its terminal
+		// update. Retake it rather than suppress every future publish.
+		return { request: true, recoveredRun: true };
+	}
+	if (record.status === "generated") return { request: false, reason: "already-generated" };
+	if (record.status === "skipped") return { request: false, reason: "previously-skipped" };
+	// status "failed": retry within the attempt budget and past the cooldown.
+	if (record.attempts >= config.maxAttempts) {
+		return { request: false, reason: "attempts-exhausted" };
+	}
 	const lastAttempt = Date.parse(record.updatedAt);
-	if (!Number.isFinite(lastAttempt)) return true;
-	return nowMs - lastAttempt >= config.retryCooldownMs;
+	if (!Number.isFinite(lastAttempt)) return { request: true };
+	if (nowMs - lastAttempt < config.retryCooldownMs) {
+		return { request: false, reason: "retry-cooldown" };
+	}
+	return { request: true };
 }
 
 const plugin: SandboxedPlugin = {
@@ -213,45 +266,107 @@ const plugin: SandboxedPlugin = {
 					}
 
 					// One in-flight generation per entry, so two publishes of the same
-					// entry cannot overwrite each other's description.
+					// entry cannot overwrite each other's description. Guards older
+					// than ABANDONED_RUN_MS belong to a hook instance that was
+					// hard-killed before its finally could release; they are retaken
+					// instead of suppressing this entry forever.
 					const guardKey = `guard:${collection}:${contentId}`;
-					if (await ctx.kv.getVersioned(guardKey)) return;
+					const existingGuard = await ctx.kv.getVersioned<{ at?: unknown }>(guardKey);
+					if (existingGuard) {
+						const heldSeconds = guardAgeSeconds(existingGuard.value?.at, Date.now());
+						if (heldSeconds !== null && heldSeconds * 1000 < ABANDONED_RUN_MS) {
+							await note("skipped", "generation-in-flight");
+							ctx.log.info(SKIP_REASONS["generation-in-flight"], {
+								collection,
+								contentId,
+								reason: "generation-in-flight" as const,
+								guardAgeSeconds: heldSeconds,
+							});
+							return;
+						}
+						// The delete only applies while the guard still carries the
+						// stale revision: if another worker already retaken it, we
+						// lose the race instead of deleting a live lease.
+						const stale = await ctx.kv.compareAndDelete(guardKey, existingGuard.revision);
+						if (!stale.applied) {
+							await note("skipped", "generation-in-flight");
+							ctx.log.info(SKIP_REASONS["generation-in-flight"], {
+								collection,
+								contentId,
+								reason: "generation-in-flight" as const,
+							});
+							return;
+						}
+						ctx.log.warn("Meta description: recovered an abandoned generation guard", {
+							collection,
+							contentId,
+							heldSeconds: heldSeconds,
+						});
+					}
 					const guard = await ctx.kv.compareAndSet(guardKey, null, {
 						at: new Date().toISOString(),
 					});
-					if (!guard.applied) return;
+					if (!guard.applied) {
+						await note("skipped", "guard-race-lost");
+						ctx.log.info(SKIP_REASONS["guard-race-lost"], {
+							collection,
+							contentId,
+							reason: "guard-race-lost" as const,
+						});
+						return;
+					}
 
 					try {
-						const sourceHash = await sha256Hex(
-							[
-								collection,
-								contentId,
-								source.title,
-								source.body,
-								config.model,
-								config.minLength,
-								config.maxLength,
-							].join("\u0000"),
-						);
-						const recordId = sourceHash;
+						const recordId = await generationRecordId({
+							collection,
+							contentId,
+							source,
+							model: config.model,
+							minLength: config.minLength,
+							maxLength: config.maxLength,
+						});
 
 						const existing = await store.getVersioned(recordId);
-						if (!shouldRequest(existing?.value, config, Date.now())) {
+						const decision = shouldRequest(existing?.value, config, Date.now());
+						if (!decision.request) {
+							const reason: SkipReason = decision.reason!;
+							await note("skipped", reason);
+							ctx.log.info(`Meta description skipped: ${SKIP_REASONS[reason]}`, {
+								collection,
+								contentId,
+								reason,
+							});
 							return;
+						}
+						if (decision.recoveredRun) {
+							ctx.log.warn("Meta description: recovering an abandoned generation attempt", {
+								collection,
+								contentId,
+							});
 						}
 						const attempts = (existing?.value.attempts ?? 0) + 1;
 						const claim = await store.compareAndSet(recordId, existing?.revision ?? null, {
-							dedupeKey: `${collection}:${contentId}:${sourceHash}`,
+							dedupeKey: `${collection}:${contentId}:${recordId}`,
 							collection,
 							contentId,
-							sourceHash,
+							sourceHash: recordId,
 							status: "running",
 							attempts,
 							model: config.model,
 							endpointHost: config.host,
 							updatedAt: new Date().toISOString(),
 						} satisfies GenerationRecord);
-						if (!claim.applied) return;
+						if (!claim.applied) {
+							// Lost the record-claim race: another publish claimed this
+							// source while we held the guard. Its attempt owns the run.
+							await note("skipped", "claim-race-lost");
+							ctx.log.info(`Meta description skipped: ${SKIP_REASONS["claim-race-lost"]}`, {
+								collection,
+								contentId,
+								reason: "claim-race-lost" satisfies SkipReason,
+							});
+							return;
+						}
 
 						const prompt = buildPrompt(
 							source,
@@ -419,6 +534,31 @@ const plugin: SandboxedPlugin = {
 				const input = routeCtx.input as Record<string, string | string[]>;
 				const queryCollection = typeof input.collection === "string" ? input.collection : null;
 				const queryId = typeof input.id === "string" ? input.id : null;
+
+				// Guard readback: a held guard means a generation is in flight (or,
+				// when stale, was abandoned by a hard-killed hook). Exposes only the
+				// timestamp — never a token or generated text.
+				let guard: {
+					held: true;
+					at: string | null;
+					ageSeconds: number | null;
+					stale: boolean;
+				} | null = null;
+				if (queryCollection && queryId) {
+					const held = await ctx.kv.getVersioned<{ at?: unknown }>(
+						`guard:${queryCollection}:${queryId}`,
+					);
+					if (held) {
+						const at = typeof held.value?.at === "string" ? held.value.at : null;
+						const ageSeconds = guardAgeSeconds(held.value?.at, Date.now());
+						guard = {
+							held: true,
+							at,
+							ageSeconds,
+							stale: ageSeconds === null || ageSeconds * 1000 >= ABANDONED_RUN_MS,
+						};
+					}
+				}
 				let entry: Record<string, unknown> | null = null;
 				if (queryCollection && queryId && ctx.content) {
 					const item = await ctx.content.get(queryCollection, queryId);
@@ -441,6 +581,7 @@ const plugin: SandboxedPlugin = {
 					issue: resolved.ok ? null : resolved.issue,
 					config: resolved.ok ? describeConfig(resolved.config) : null,
 					entry,
+					guard,
 					recent: recent.items.map((item) => ({
 						collection: item.data.collection,
 						contentId: item.data.contentId,

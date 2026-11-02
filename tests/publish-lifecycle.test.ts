@@ -115,11 +115,14 @@ async function fallbackDescription(collection: string, id: string): Promise<stri
 	return record?.description ?? null;
 }
 
-/** Read the newest audit note outcome for an entry. */
+/** Read the newest audit note outcome for an entry, by the note's own timestamp. */
 async function latestOutcome(id: string): Promise<string | null> {
-	const audit = await host!.inspect.storage.list<{ contentId: string; outcome: string }>("audit");
+	const audit = await host!.inspect.storage.list<{ contentId: string; outcome: string; at?: string }>("audit");
 	const notes = audit.filter((entry) => entry.data.contentId === id);
-	return notes.length > 0 ? notes[notes.length - 1]!.data.outcome : null;
+	if (notes.length === 0) return null;
+	return notes.reduce((newest, entry) =>
+		Date.parse(entry.data.at ?? "") > Date.parse(newest.data.at ?? "") ? entry : newest,
+	).data.outcome;
 }
 
 describe("publish lifecycle: description generation", () => {
@@ -455,5 +458,201 @@ describe("admin routes", () => {
 		};
 		expect(result.ok).toBe(true);
 		expect(result.host).toBe("api.openai.com");
+	});
+});
+
+describe("stale guards and abandoned runs", () => {
+	/** Read the record id (sourceHash) of the newest generation record for an entry. */
+	async function firstGenerationRecordId(collection: string, id: string): Promise<string> {
+		const records = await host!.inspect.storage.list<{ contentId?: string; sourceHash?: string }>(
+			"generations",
+		);
+		const record = records.find((entry) => entry.data.contentId === id);
+		if (!record?.data.sourceHash) throw new Error("no generation record found");
+		return record.data.sourceHash;
+	}
+
+	interface SeededRecord {
+		dedupeKey: string;
+		collection: string;
+		contentId: string;
+		sourceHash: string;
+		status: string;
+		attempts: number;
+		updatedAt: string;
+		[key: string]: unknown;
+	}
+
+	/** Run one failing publish so a real failed record exists, then hand it back. */
+	async function createFailingSource(): Promise<{ id: string; recordId: string }> {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, new Response("upstream down", { status: 500 }));
+		const id = await createArticle({ title: "Recovery article", body: "Body text.".repeat(30) });
+		await publishArticle(id);
+		const recordId = await firstGenerationRecordId("articles", id);
+		const record = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		if (!record) throw new Error("generation record missing");
+		return { id, recordId };
+	}
+
+	it("recovers a guard left behind by a hard-killed hook and generates", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("J".repeat(90)));
+		const id = await createArticle({ title: "Stale guard", body: "Body text.".repeat(30) });
+		// A guard abandoned ten minutes ago by a hook that never released it.
+		await host!.fixtures.plugin.kv(
+			`guard:articles:${id}`,
+			{ at: new Date(Date.now() - 10 * 60_000).toISOString() },
+		);
+		await publishArticle(id);
+
+		// The stale guard was retaken and the generation completed.
+		expect(host!.http.requests()).toHaveLength(1);
+		const view = await pluginView("articles", id);
+		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
+		expect(generated).toBe("J".repeat(90));
+	});
+
+	it("skips with an explicit reason while a fresh guard is held", async () => {
+		await configureEndpoint();
+		const id = await createArticle({ title: "Held guard", body: "Body text.".repeat(30) });
+		await host!.fixtures.plugin.kv(`guard:articles:${id}`, { at: new Date().toISOString() });
+		await publishArticle(id);
+
+		expect(host!.http.requests()).toHaveLength(0);
+		expect(await latestOutcome(id)).toBe("generation-in-flight");
+		const diagnostics = (await host!.transport.invokeRoute("diagnostics", {
+			collection: "articles",
+			id,
+		})) as { guard?: { held: boolean; stale: boolean; ageSeconds: number | null; at: string | null } };
+		expect(diagnostics.guard?.held).toBe(true);
+		expect(diagnostics.guard?.stale).toBe(false);
+		expect(JSON.stringify(diagnostics)).not.toContain(TOKEN);
+	});
+
+	it("reports a stale guard as stale in diagnostics", async () => {
+		await configureEndpoint();
+		const id = await createArticle({ title: "Stale diagnostic", body: "Body text.".repeat(30) });
+		await host!.fixtures.plugin.kv(
+			`guard:articles:${id}`,
+			{ at: new Date(Date.now() - 10 * 60_000).toISOString() },
+		);
+		const diagnostics = (await host!.transport.invokeRoute("diagnostics", {
+			collection: "articles",
+			id,
+		})) as { guard?: { held: boolean; stale: boolean } };
+		expect(diagnostics.guard?.held).toBe(true);
+		expect(diagnostics.guard?.stale).toBe(true);
+	});
+
+	it("does not delete a guard that replaced its own when finishing late", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("K".repeat(90)));
+		const id = await createArticle({ title: "Late cleanup", body: "Body text.".repeat(30) });
+		const hookPromise = host!.transport.invokeHook("content:afterPublish", {
+			collection: "articles",
+			content: { id },
+		});
+
+		// Wait until this hook holds the guard, then simulate another worker
+		// taking the guard key over while the first is still finishing.
+		for (let waited = 0; waited < 5000; waited += 25) {
+			const held = await host!.inspect.kv.get(`guard:articles:${id}`);
+			if (held) break;
+			await new Promise((resolve) => setTimeout(resolve, 25));
+		}
+		await host!.fixtures.plugin.kv(`guard:articles:${id}`, { at: new Date().toISOString() });
+		await hookPromise;
+
+		// The finishing worker's cleanup must not have deleted the replacement.
+		expect(await host!.inspect.kv.get(`guard:articles:${id}`)).not.toBeNull();
+		// And the surviving guard still excludes a new publish.
+		const requestsBeforeRepublish = host!.http.requests().length;
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+		expect(host!.http.requests().length).toBe(requestsBeforeRepublish);
+		expect(await latestOutcome(id)).toBe("generation-in-flight");
+	});
+
+	it("bills exactly one endpoint call when two publishes race", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("L".repeat(90)));
+		const id = await createArticle({ title: "Racy article", body: "Body text.".repeat(30) });
+		await Promise.all([
+			host!.transport.invokeHook("content:afterPublish", {
+				collection: "articles",
+				content: { id },
+			}),
+			host!.transport.invokeHook("content:afterPublish", {
+				collection: "articles",
+				content: { id },
+			}),
+		]);
+
+		// The guard CAS admits exactly one contender.
+		expect(host!.http.requests()).toHaveLength(1);
+		const view = await pluginView("articles", id);
+		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
+		expect(generated).toBe("L".repeat(90));
+	});
+
+	it("recovers an abandoned running claim and finishes the generation", async () => {
+		const { id, recordId } = await createFailingSource();
+		const record = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		// Simulate a hook instance that claimed the run and was killed before
+		// any terminal update: running with a stale timestamp.
+		await host!.fixtures.plugin.storage("generations", recordId, {
+			...record,
+			status: "running",
+			updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+		});
+		await host!.http.respond(ENDPOINT, completion("M".repeat(90)));
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+
+		expect(host!.http.requests()).toHaveLength(2);
+		const view = await pluginView("articles", id);
+		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
+		expect(generated).toBe("M".repeat(90));
+	});
+
+	it("skips with an explicit reason inside the retry cooldown and retries afterwards", async () => {
+		const { id, recordId } = await createFailingSource();
+		const requestsAfterFirstFailure = host!.http.requests().length;
+
+		// Republish immediately: the failed attempt is still inside its cooldown.
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+		expect(host!.http.requests().length).toBe(requestsAfterFirstFailure);
+		expect(await latestOutcome(id)).toBe("retry-cooldown");
+
+		// Once the cooldown has elapsed the source is retried and succeeds.
+		const record = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		await host!.fixtures.plugin.storage("generations", recordId, {
+			...record,
+			updatedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+		});
+		await host!.http.respond(ENDPOINT, completion("N".repeat(90)));
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+		expect(host!.http.requests().length).toBe(requestsAfterFirstFailure + 1);
+		const view = await pluginView("articles", id);
+		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
+		expect(generated).toBe("N".repeat(90));
+	});
+
+	it("skips with an explicit reason once the retry budget is exhausted", async () => {
+		const { id, recordId } = await createFailingSource();
+		const record = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		await host!.fixtures.plugin.storage("generations", recordId, {
+			...record,
+			attempts: 3,
+			updatedAt: new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+		});
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+
+		expect(host!.http.requests()).toHaveLength(1);
+		expect(await latestOutcome(id)).toBe("attempts-exhausted");
 	});
 });
