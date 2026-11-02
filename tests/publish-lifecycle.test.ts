@@ -616,6 +616,73 @@ describe("stale guards and abandoned runs", () => {
 		expect(generated).toBe("M".repeat(90));
 	});
 
+	it("does not recover an interrupted attempt once maxAttempts is reached", async () => {
+		// Budget of one: a single billed attempt is the entire allowance.
+		await host!.actions.plugin.updateSettings({
+			enabled: true,
+			endpoint: ENDPOINT,
+			model: "gpt-4o-mini",
+			apiKey: TOKEN,
+			minLength: 70,
+			maxLength: 160,
+			maxAttempts: 1,
+		});
+		await host!.http.respond(ENDPOINT, new Response("upstream down", { status: 500 }));
+		const id = await createArticle({ title: "Interrupted", body: "Body text.".repeat(30) });
+		await publishArticle(id);
+		const recordId = await firstGenerationRecordId("articles", id);
+		const record = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		expect(record?.attempts).toBe(1);
+
+		// The attempt was interrupted, not finished: rewrite it as a stale
+		// running claim, exactly what abandoned-run recovery retakes.
+		await host!.fixtures.plugin.storage("generations", recordId, {
+			...record,
+			status: "running",
+			updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+		});
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+
+		// No second billed request: recovery must respect the budget.
+		expect(host!.http.requests()).toHaveLength(1);
+		expect(await latestOutcome(id)).toBe("attempts-exhausted");
+	});
+
+	it("keeps repeated stale recoveries inside the default retry budget", async () => {
+		const { id, recordId } = await createFailingSource();
+		const record = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		expect(record?.attempts).toBe(1);
+
+		// Below the limit: a stale interrupted attempt is retaken and billed.
+		await host!.fixtures.plugin.storage("generations", recordId, {
+			...record,
+			status: "running",
+			updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+		});
+		await host!.http.respond(ENDPOINT, completion("R".repeat(90)));
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+		expect(host!.http.requests()).toHaveLength(2);
+		const view = await pluginView("articles", id);
+		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
+		expect(generated).toBe("R".repeat(90));
+
+		// At the limit: another stale interrupted claim is not retaken, so no
+		// further request is billed even though the run looks abandoned.
+		const recovered = await host!.inspect.storage.get<SeededRecord>("generations", recordId);
+		await host!.fixtures.plugin.storage("generations", recordId, {
+			...recovered,
+			status: "running",
+			attempts: 3,
+			updatedAt: new Date(Date.now() - 10 * 60_000).toISOString(),
+		});
+		await host!.actions.content.publish("articles", id);
+		await host!.waitForDeferredTasks();
+		expect(host!.http.requests()).toHaveLength(2);
+		expect(await latestOutcome(id)).toBe("attempts-exhausted");
+	});
+
 	it("skips with an explicit reason inside the retry cooldown and retries afterwards", async () => {
 		const { id, recordId } = await createFailingSource();
 		const requestsAfterFirstFailure = host!.http.requests().length;
