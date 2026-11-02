@@ -161,7 +161,10 @@ function hasText(value: unknown): boolean {
  * so no request is sent and no cost is incurred. A `running` record older
  * than ABANDONED_RUN_MS belongs to a hook instance that died before it could
  * finish, so the request is allowed again instead of suppressing this entry
- * forever. Every negative answer carries an explicit skip reason.
+ * forever — but only while the retry budget lasts: the abandoned attempt
+ * already counted against maxAttempts, so recovery of an exhausted budget
+ * must not issue another billed request. Every negative answer carries an
+ * explicit skip reason.
  */
 function shouldRequest(
 	record: GenerationRecord | undefined,
@@ -175,7 +178,14 @@ function shouldRequest(
 			return { request: false, reason: "run-in-progress" };
 		}
 		// Stuck claim: a previous hook instance never reached its terminal
-		// update. Retake it rather than suppress every future publish.
+		// update. Retake it rather than suppress every future publish — but
+		// the stale attempt already consumed one slot of the retry budget,
+		// so apply the same maxAttempts limit as the "failed" path. (No
+		// cooldown check here: a recovery must remain possible for a run
+		// that hung shortly after claiming, within the staleness window.)
+		if (record.attempts >= config.maxAttempts) {
+			return { request: false, reason: "attempts-exhausted" };
+		}
 		return { request: true, recoveredRun: true };
 	}
 	if (record.status === "generated") return { request: false, reason: "already-generated" };
