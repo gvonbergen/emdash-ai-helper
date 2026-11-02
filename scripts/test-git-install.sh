@@ -24,33 +24,6 @@ sha="$(git -C "$repo_root" rev-parse HEAD)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# Some environments ship a git wrapper whose exec-path helpers mishandle the
-# shell-resolved `git-upload-pack` invocation that local (file://) transport
-# needs. Detect that and, only then, run this script's git calls against a
-# controlled exec-path with correct upload/receive-pack shims. Normal git
-# installs are left untouched.
-if ! git init -q --bare "$tmp/probe.git" 2>/dev/null \
-	|| ! git ls-remote "file://$tmp/probe.git" >/dev/null 2>&1; then
-	echo "==> ambient git cannot serve local file:// transport; using controlled exec-path"
-	git_bin="$(command -v git)"
-	real_git="$(readlink -f "$git_bin")"
-	# If the resolved git is a wrapper script (it re-exports GIT_EXEC_PATH and
-	# would clobber ours), use the real binary it execs instead.
-	if head -n 1 "$real_git" 2>/dev/null | grep -q '^#!'; then
-		target="$(sed -n 's/^exec "\{0,1\}\([^" ]*\)"\{0,1\} "\$@"$/\1/p' "$real_git" | tail -n 1)"
-		target="${target/\$HOME/$HOME}"
-		if [ -n "$target" ] && [ -x "$target" ]; then real_git="$target"; fi
-	fi
-	mkdir -p "$tmp/gitbin" "$tmp/gitexec"
-	ln -sf "$real_git" "$tmp/gitbin/git"
-	for helper in upload-pack receive-pack; do
-		printf '#!/bin/sh\nexec %s %s "$@"\n' "$real_git" "$helper" >"$tmp/gitexec/git-$helper"
-		chmod +x "$tmp/gitexec/git-$helper"
-	done
-	export PATH="$tmp/gitbin:$PATH"
-	export GIT_EXEC_PATH="$tmp/gitexec"
-fi
-
 echo "==> materializing a clean remote from committed HEAD ($sha)"
 # This checkout is a disposable git worktree, so it cannot serve as a clone
 # source directly; a bundle carries the committed HEAD into a throwaway bare

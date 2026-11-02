@@ -35,9 +35,11 @@ contract; keep script execution enabled for your install step.
 
 ### pnpm build-script gating
 
-pnpm gates dependency lifecycle scripts. With build gating enabled
-(`strictDepBuilds`, which this repository enables), the accepted `allowBuilds`
-key depends on the pnpm version:
+pnpm gates dependency lifecycle scripts. A git-hosted dependency's `prepare`
+requires explicit `allowBuilds` approval on every supported pnpm version,
+independently of `strictDepBuilds`. `strictDepBuilds` only controls how pnpm
+treats other blocked dependency build scripts; it does not approve this
+`prepare`. The accepted `allowBuilds` key depends on the pnpm version:
 
 - **pnpm 11.9.0 and 11.10.0** require the exact full resolved commit in the
   key: `emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git#<resolved-commit-sha>`.
@@ -112,14 +114,15 @@ For **Cloudflare Workers Builds** (git-connected staging/production builds):
 
   ```sh
   git config --global \
-    "url.https://x-access-token:${EMDASH_AI_HELPER_GITHUB_TOKEN}@github.com/gvonbergen/emdash-ai-helper.insteadOf" \
-    'https://github.com/gvonbergen/emdash-ai-helper' \
+    "url.https://x-access-token:${EMDASH_AI_HELPER_GITHUB_TOKEN}@github.com/gvonbergen/emdash-ai-helper.git.insteadOf" \
+    'https://github.com/gvonbergen/emdash-ai-helper.git' \
   && pnpm install --frozen-lockfile \
   && pnpm build
   ```
 
-  The rewrite is scoped to this repository's URL prefix; every other GitHub
-  clone stays anonymous.
+  The rewrite applies only to URLs beginning with the exact `.git` repository
+  URL, so consumers must use that URL form; other GitHub clones stay
+  anonymous.
 
 - Local development needs no dashboard setup: your existing GitHub SSH/HTTPS
   credentials already clone the private repository.
