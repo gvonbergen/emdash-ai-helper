@@ -34,26 +34,32 @@ contract; keep script execution enabled for your install step.
 
 ### pnpm build-script gating
 
-pnpm gates dependency lifecycle scripts. Verified behaviour:
+pnpm gates dependency lifecycle scripts. With build gating enabled
+(`strictDepBuilds`, which this repository enables), the accepted `allowBuilds`
+key depends on the pnpm version:
 
-- **pnpm 11.9.0** runs the git dependency's `prepare` without any allowlist
-  entry — no extra configuration needed.
-- **pnpm ≥ 12** with the default strict build policy
-  (`strictDepBuilds`, as this repository itself uses) refuses with
-  `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` until the dependency is allowlisted.
-  For git-hosted packages the `allowBuilds` key must include the **package name
-  and repository**, but must not include the tag or commit ref:
+- **pnpm 11.9.0 and 11.10.0** require the exact full resolved commit in the
+  key: `emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git#<resolved-commit-sha>`.
+- **pnpm 11.11.0 through 11.14.0** support repository-URL matching, so the
+  hashless key `emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git`
+  is accepted.
+- **pnpm 12.16.1** supports both that hashless repository key and the exact
+  full resolved-SHA form. A tag-qualified key is not accepted because pnpm
+  checks the resolved git artifact.
 
-  ```yaml
-  # pnpm-workspace.yaml of the consumer
-  allowBuilds:
-    "emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git": true
-  ```
+This repository declares pnpm 12.16.1, so its supported consumer configuration
+is:
 
-  pnpm resolves the pinned tag or commit SHA before checking whether the git
-  dependency may run `prepare`, and matches the hashless repository rule above.
-  The same key therefore approves both tag and SHA pins; update it only when the
-  repository URL changes.
+```yaml
+# pnpm-workspace.yaml of the consumer
+allowBuilds:
+  "emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git": true
+```
+
+pnpm resolves the pinned tag or commit SHA before checking whether the git
+dependency may run `prepare`, and the hashless repository key therefore
+approves both tag and SHA pins. Update the key only when the repository URL
+changes.
 
 ## Pinned references
 
