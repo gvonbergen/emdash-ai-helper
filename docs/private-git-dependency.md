@@ -123,8 +123,9 @@ For **Cloudflare Workers Builds** (git-connected staging/production builds):
   URL, so consumers must use that URL form; other GitHub clones stay
   anonymous.
 
-- Local development needs no dashboard setup: your existing GitHub SSH/HTTPS
-  credentials already clone the private repository.
+- Local development needs no dashboard setup: configure Git to authenticate
+  HTTPS clones of the private repository, for example with a GitHub credential
+  helper.
 
 ## What is deliberately not used
 

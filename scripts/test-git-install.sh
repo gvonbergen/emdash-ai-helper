@@ -5,7 +5,7 @@
 # Simulates what a consumer does when installing this repository as a pinned
 # git dependency:
 #
-#   1. bare-clone the committed HEAD into a throwaway remote
+#   1. materialize the committed HEAD in a throwaway bare remote
 #   2. create a fixture consumer with a strict build-script policy that
 #      depends on `git+file://<remote>#v0.2.0`
 #   3. run a clean `pnpm install` (which must run our `prepare` script and
