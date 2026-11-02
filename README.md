@@ -46,7 +46,9 @@ The `diagnostics` admin route reports which channel is active
 
 ## Setup
 
-1. Install the plugin package in your EmDash site and register it:
+1. Install the plugin package in your EmDash site and register it (the package
+   is also consumable from a private git repository — see
+   `docs/private-git-dependency.md`):
 
    ```ts
    // astro.config.mjs
@@ -164,6 +166,7 @@ pnpm run validate   # manifest check
 pnpm run typecheck  # strict TypeScript
 pnpm run test       # unit tests + sandboxed publish-lifecycle tests (workerd)
 pnpm run build      # dist/plugin.mjs, dist/manifest.json, dist/index.mjs
+pnpm run test:git-install  # prove the private git-dependency contract end to end
 ```
 
 The test suite is fully mocked: no real credentials are used and no content is
@@ -171,3 +174,14 @@ transmitted to any external service. The lifecycle tests run through EmDash's
 production sandbox transport (`@emdash-cms/plugin-test`), including user
 description precedence, empty entries, endpoint failures, output validation,
 publish retries, and token-leak checks.
+
+## Private distribution
+
+This repository is private and is **not** published to the EmDash plugin
+registry. It is distributed as a pinned git dependency: package managers build
+`dist/` from source through the `prepare` script at install time, and git-
+connected builds consume it with a scoped, read-only GitHub credential. The
+full contract — pinned refs, pnpm build-script allowlisting, and the Cloudflare
+Workers Builds secret setup — is documented in
+`docs/private-git-dependency.md`; the tag-based release process lives in
+`docs/release.md`.

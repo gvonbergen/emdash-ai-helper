@@ -32,6 +32,27 @@ opaque prebuilt bundle in git and no dist to keep in sync by hand.
 Consumers that disable lifecycle scripts (`ignore-scripts=true`) break this
 contract; keep script execution enabled for your install step.
 
+### pnpm build-script gating
+
+pnpm gates dependency lifecycle scripts. Verified behaviour:
+
+- **pnpm 11.9.0** runs the git dependency's `prepare` without any allowlist
+  entry — no extra configuration needed.
+- **pnpm ≥ 12** with the default strict build policy
+  (`strictDepBuilds`, as this repository itself uses) refuses with
+  `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` until the dependency is allowlisted.
+  For git-hosted packages the `allowBuilds` key must be the **full dependency
+  spec**, not the bare package name:
+
+  ```yaml
+  # pnpm-workspace.yaml of the consumer
+  allowBuilds:
+    "emdash-ai-helper@git+https://github.com/gvonbergen/emdash-ai-helper.git#v0.2.0": true
+  ```
+
+  The key must match the pinned ref, so bumping the ref (a new release tag or
+  commit SHA) also updates this key.
+
 ## Pinned references
 
 Pin the dependency to a **release tag** or an explicit commit SHA. Tags are cut
