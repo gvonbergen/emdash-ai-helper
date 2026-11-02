@@ -21,6 +21,17 @@ Editors keep full control: a description typed by a human is never overwritten.
   combination is fingerprinted. A retry of the same publish reuses the previous
   result and sends nothing. Only failed attempts consume retry budget
   (configurable, default 3 attempts per text version, 1-hour cooldown).
+- **Self-healing locks.** One in-flight generation per entry is enforced with a
+  guard key. A guard or a `running` claim older than five minutes belongs to a
+  hook instance that was hard-killed before it could release, so it is retaken
+  on the next publish instead of suppressing that entry forever. The retake is
+  a compare-and-delete on the stale revision: if another worker took the guard
+  over in the meantime, the stale worker loses the race instead of deleting a
+  live lease.
+- **Explicit skip reasons.** Every path that ends without a request — guard
+  held, guard race lost, already generated, retry cooldown, exhausted budget,
+  run already claimed — writes an audit note and a log line naming the reason,
+  so a silent skip is diagnosable.
 - **No recursion.** The plugin registers only `content:afterPublish` and
   `page:metadata`. It never registers `content:beforeSave`/`content:afterSave`,
   and an SEO-only panel write does not run content save hooks.
@@ -124,7 +135,8 @@ Both routes require the `plugins:manage` permission.
 
 - `GET /_emdash/api/plugins/emdash-ai-helper/diagnostics[?collection=…&id=…]`
   — configuration summary (no secrets), the newest generation records, and, for
-  a given entry, what the plugin sees in its SEO panel.
+  a given entry, what the plugin sees in its SEO panel plus the state of its
+  generation guard (`held`, timestamp, age, whether it is stale).
 - `POST /_emdash/api/plugins/emdash-ai-helper/test-endpoint` — sends a fixed
   connectivity probe (no site content) and reports the mapped failure code.
 
@@ -136,6 +148,8 @@ Both routes require the `plugins:manage` permission.
 | No token / invalid endpoint / disabled | Skipped with a `config:*` diagnostic |
 | Entry has no text to summarise | Skipped with an `empty-source` diagnostic |
 | Collection has no SEO panel | Skipped with an `seo-disabled` diagnostic |
+| A generation is already in flight | Skipped with a `generation-in-flight` diagnostic; stale guards (older than 5 minutes) are retaken |
+| This source is already described / skipped / exhausted / cooling down | Skipped with the matching explicit diagnostic (`already-generated`, `previously-skipped`, `attempts-exhausted`, `retry-cooldown`) |
 | Timeout or unreachable endpoint | Recorded; retried on a later publish within the attempt budget |
 | HTTP 4xx (e.g. bad token, no quota) | Recorded; retried within the budget |
 | HTTP 5xx | Recorded; retried within the budget |
