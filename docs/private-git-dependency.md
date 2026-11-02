@@ -17,14 +17,13 @@ package. Consumers install it as a pinned git dependency instead.
 
 - `dist/` is **gitignored** and is **never committed**. It is built from source
   at install time.
-- When a package is installed through the git protocol, npm and pnpm install
-  the package's dev dependencies (`@emdash-cms/plugin-cli`) before invoking
-  `prepare` (npm documents this contract; pnpm delegates git-hosted packages to
-  npm internally). The `prepare` script itself only runs `emdash-plugin build`;
-  it does not run another install, so the build-only contract does not
-  reintroduce the removed recursive nested install. The build produces
-  `dist/index.mjs`, `dist/plugin.mjs`, `dist/manifest.json` and the type
-  declarations.
+- When this package is installed through the git protocol, pnpm prepares the
+  dependency. This package requests pnpm 12.16.1, so pnpm installs the package's
+  dev dependencies (`@emdash-cms/plugin-cli`) before invoking `prepare`. The
+  `prepare` script itself only runs `emdash-plugin build`; it does not run
+  another install, so the build-only contract does not reintroduce the removed
+  recursive nested install. The build produces `dist/index.mjs`,
+  `dist/plugin.mjs`, `dist/manifest.json` and the type declarations.
 - After `prepare`, the packer includes `dist/` (it is listed in `files`), so the
   installed package is importable exactly like a registry package.
 
