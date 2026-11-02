@@ -27,8 +27,9 @@
  *   never written.
  * - `page:metadata` only ever reads plugin storage; it never calls the AI
  *   endpoint. It contributes a `<meta name="description">` tag only when the
- *   page carries no description of its own, so site-provided and
- *   editor-authored descriptions always win.
+ *   page carries no description text of its own, so site-provided and
+ *   editor-authored descriptions always win. A saved SEO row with an empty
+ *   description is not a description, so it does not silence this channel.
  * - Registering `content:beforeSave` would generate on every draft save, so it
  *   is deliberately not used.
  * - Nothing is generated while a public page is served.
@@ -558,11 +559,17 @@ const plugin: SandboxedPlugin = {
 		 * never called while a public page is rendered. EmDash deduplicates
 		 * first-wins, so a description the site or the SEO panel already
 		 * provides always takes precedence over this contribution.
+		 *
+		 * "Provides" means carries text: a saved SEO row whose description is
+		 * empty (the shape migrated entries and entries saved before this plugin
+		 * existed) is not a description, and treating it as one would silence the
+		 * only channel that can deliver the generated text on a runner where the
+		 * panel write is rejected.
 		 */
 		"page:metadata": async (event, ctx) => {
 			const page = event.page;
 			if (page.kind !== "content" || !page.content) return null;
-			if (page.description != null) return null;
+			if (hasText(page.description)) return null;
 
 			const descriptions = ctx.storage.descriptions as unknown as DescriptionStore;
 			const record = await descriptions.get(`${page.content.collection}:${page.content.id}`);

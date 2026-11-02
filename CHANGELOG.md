@@ -17,6 +17,13 @@ git tags.
   guard, the retry budget, the diagnostics route, and every existing skip
   reason are unchanged; the canonical target stays the panel's meta
   description.
+- The `page:metadata` fallback channel no longer silences itself on an empty
+  SEO row. It fired only when the page description was `null`, so an entry that
+  already had a SEO row carrying `""` — the shape a generated description lands
+  on when the sandbox bridge rejects the panel write — swallowed the generated
+  text: it was billed, stored, and never rendered. An empty panel description is
+  now treated as absent, so the fallback tag fires, while real site- and
+  editor-authored text still wins.
 - The manifest declares the read-only `schema:read` capability to read that
   flag. Per `docs/release.md` a changed trust contract is a minor bump, so the
   consumer reinstalls and re-consents the manifest before the gate takes

@@ -54,9 +54,11 @@ The canonical target is the entry's SEO panel (`ctx.content.update` with an
 `seo` payload). On EmDash 1.4.0 sandbox runners this write is rejected by the
 host bridge (`Unknown field 'seo'`), so the plugin then keeps the description in
 its own storage and serves it through the `page:metadata` hook as
-`<meta name="description">`. That contribution only fires when the page carries
-no description of its own, so the site's and editors' descriptions always take
-precedence. When the SEO-panel write succeeds, the fallback copy is removed.
+`<meta name="description">`. That contribution fires only when the page carries
+no description text of its own, so the site's and editors' descriptions always
+take precedence — while a saved SEO row whose description is empty is not a
+description and does not silence the fallback. When the SEO-panel write
+succeeds, the fallback copy is removed.
 
 The `diagnostics` admin route reports which channel is active
 (`generated` vs. `generated:fallback`) per recent generation.
@@ -155,6 +157,7 @@ Both routes require the `plugins:manage` permission.
 | Entry has no text to summarise | Skipped with an `empty-source` diagnostic |
 | Collection has no SEO panel | Skipped with an `seo-disabled` diagnostic |
 | Entry has no SEO row yet (migrated post, new draft) | Generated like any other empty description; the panel flag is read from the collection schema |
+| SEO-panel write rejected by the host bridge | Description kept in plugin storage and served through `page:metadata`; an empty saved panel row does not silence that channel |
 | A generation is already in flight | Skipped with a `generation-in-flight` diagnostic; stale guards (older than 5 minutes) are retaken |
 | This source is already described / skipped / exhausted / cooling down | Skipped with the matching explicit diagnostic (`already-generated`, `previously-skipped`, `attempts-exhausted`, `retry-cooldown`) |
 | Timeout or unreachable endpoint | Recorded; retried on a later publish within the attempt budget |

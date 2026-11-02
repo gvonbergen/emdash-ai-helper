@@ -115,6 +115,17 @@ async function fallbackDescription(collection: string, id: string): Promise<stri
 	return record?.description ?? null;
 }
 
+/**
+ * The description a reader can actually see: the panel text when it carries
+ * one, otherwise the plugin's fallback copy. An empty panel value is not a
+ * description, so it must not mask the fallback channel.
+ */
+async function visibleDescription(collection: string, id: string): Promise<string | null> {
+	const panel = (await pluginView(collection, id))?.seoDescription;
+	if (panel != null && panel.trim() !== "") return panel;
+	return (await fallbackDescription(collection, id)) ?? null;
+}
+
 /** Read the newest audit note outcome for an entry, by the note's own timestamp. */
 async function latestOutcome(id: string): Promise<string | null> {
 	const audit = await host!.inspect.storage.list<{ contentId: string; outcome: string; at?: string }>("audit");
@@ -238,8 +249,7 @@ describe("SEO panel availability", () => {
 
 		expect(host!.http.requests()).toHaveLength(1);
 		const view = await pluginView("articles", id);
-		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
-		expect(generated).toBe("P".repeat(90));
+		expect(await visibleDescription("articles", id)).toBe("P".repeat(90));
 		expect(await latestOutcome(id)).not.toBe("seo-disabled");
 		expect(view?.seoPanelEnabled).toBe(true);
 	});
@@ -254,9 +264,28 @@ describe("SEO panel availability", () => {
 		await publishArticle(id);
 
 		expect(host!.http.requests()).toHaveLength(1);
-		const generated = (await pluginView("articles", id))?.seoDescription ??
-			(await fallbackDescription("articles", id));
-		expect(generated).toBe("E".repeat(90));
+		expect(await visibleDescription("articles", id)).toBe("E".repeat(90));
+
+		// A saved SEO row whose description is empty is not a description, so it
+		// must not silence the only channel that can deliver the generated text
+		// on a runner where the SEO-panel write is rejected by the host bridge.
+		const contributions = (await host!.transport.invokeHook("page:metadata", {
+			page: {
+				url: "https://plugin.test/articles/empty-panel",
+				path: "/articles/empty-panel",
+				locale: "en",
+				kind: "content",
+				pageType: "articles",
+				title: "Empty panel",
+				description: "",
+				canonical: null,
+				image: null,
+				content: { collection: "articles", id, slug: null },
+			},
+		})) as Array<{ kind: string; name?: string; content?: string }> | null;
+		expect(contributions).toEqual([
+			{ kind: "meta", name: "description", content: "E".repeat(90) },
+		]);
 	});
 
 	it("leaves a description the SEO row already carries untouched", async () => {
