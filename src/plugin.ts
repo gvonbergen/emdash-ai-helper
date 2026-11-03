@@ -18,10 +18,18 @@
  *   own storage and contributes it through the `page:metadata` hook instead.
  *   When the SEO-panel write succeeds the fallback copy is removed so the
  *   panel stays the single source of truth.
+ * - SEO support is read from the collection schema (`hasSeo` via
+ *   `ctx.schema.getCollection`), not from the entry. EmDash returns `seo` only
+ *   when the entry already has a SEO row, so a missing block means "no
+ *   description yet", never "panel disabled": entries with no row (migrated
+ *   posts, brand-new drafts) are generated like any other empty description.
+ *   The canonical target stays the panel's meta description; the excerpt is
+ *   never written.
  * - `page:metadata` only ever reads plugin storage; it never calls the AI
  *   endpoint. It contributes a `<meta name="description">` tag only when the
- *   page carries no description of its own, so site-provided and
- *   editor-authored descriptions always win.
+ *   page carries no description text of its own, so site-provided and
+ *   editor-authored descriptions always win. A saved SEO row with an empty
+ *   description is not a description, so it does not silence this channel.
  * - Registering `content:beforeSave` would generate on every draft save, so it
  *   is deliberately not used.
  * - Nothing is generated while a public page is served.
@@ -32,7 +40,7 @@
  * written to storage, logs, routes, or diagnostics.
  */
 
-import type { SandboxedPlugin } from "emdash/plugin";
+import type { PluginContext, SandboxedPlugin } from "emdash/plugin";
 
 import { describeConfig, resolveConfig, type EndpointConfig } from "./lib/config.js";
 import { buildPrompt, describeOutput } from "./lib/describe.js";
@@ -109,6 +117,43 @@ function guardAgeSeconds(at: unknown, nowMs: number): number | null {
 	if (typeof at !== "string") return null;
 	const parsed = Date.parse(at);
 	return Number.isFinite(parsed) ? Math.max(0, Math.round((nowMs - parsed) / 1000)) : null;
+}
+
+/**
+ * The slice of the plugin context the SEO-panel probe reads. Declared locally
+ * so a unit test can hand it a stub without building a whole host context.
+ */
+type SchemaProbe = Pick<PluginContext, "schema">;
+
+/**
+ * Whether a collection exposes the core SEO panel.
+ *
+ * `entry.seo` cannot answer this on its own. EmDash attaches the block only
+ * when the entry already carries a SEO row, so a migrated post and a
+ * brand-new draft both read as panel-less even when their collection
+ * declares SEO support — reading a missing block as "panel disabled" skips
+ * every one of those entries and never reaches the endpoint. The schema flag
+ * (`hasSeo`) is the authoritative source, so a missing block is treated as an
+ * empty description and generation proceeds.
+ *
+ * When the flag cannot be read (an older host without `schema:read`, a failed
+ * lookup, a collection missing from the registry) the panel is assumed
+ * present, because generating is the safe default: a collection genuinely
+ * without SEO fails the panel write and falls back to the plugin's own
+ * storage, while guessing "disabled" silently drops the description.
+ */
+export async function seoPanelSupported(
+	ctx: SchemaProbe,
+	collection: string,
+): Promise<boolean> {
+	const schema = ctx.schema;
+	if (!schema?.getCollection) return true;
+	try {
+		const info = await schema.getCollection(collection);
+		return info?.hasSeo !== false;
+	} catch {
+		return true;
+	}
 }
 
 /**
@@ -249,8 +294,12 @@ const plugin: SandboxedPlugin = {
 					if (!entry) return;
 
 					// Collections without the core SEO panel have nowhere to store a
-					// meta description; say so once per entry instead of looping.
-					if (entry.seo === undefined) {
+					// meta description; say so once per entry instead of looping. A
+					// missing `seo` block is not that evidence — it only means the entry
+					// has no SEO row yet, so the collection flag decides.
+					const panelSupported =
+						entry.seo !== undefined || (await seoPanelSupported(ctx, collection));
+					if (!panelSupported) {
 						await note("skipped", "seo-disabled");
 						ctx.log.info("Meta description skipped: SEO panel is disabled for this collection", {
 							collection,
@@ -260,7 +309,7 @@ const plugin: SandboxedPlugin = {
 					}
 
 					// An editor-authored description always wins.
-					if (hasText(entry.seo.description)) {
+					if (hasText(entry.seo?.description)) {
 						await note("skipped", "manual-description");
 						return;
 					}
@@ -510,11 +559,17 @@ const plugin: SandboxedPlugin = {
 		 * never called while a public page is rendered. EmDash deduplicates
 		 * first-wins, so a description the site or the SEO panel already
 		 * provides always takes precedence over this contribution.
+		 *
+		 * "Provides" means carries text: a saved SEO row whose description is
+		 * empty (the shape migrated entries and entries saved before this plugin
+		 * existed) is not a description, and treating it as one would silence the
+		 * only channel that can deliver the generated text on a runner where the
+		 * panel write is rejected.
 		 */
 		"page:metadata": async (event, ctx) => {
 			const page = event.page;
 			if (page.kind !== "content" || !page.content) return null;
-			if (page.description != null) return null;
+			if (hasText(page.description)) return null;
 
 			const descriptions = ctx.storage.descriptions as unknown as DescriptionStore;
 			const record = await descriptions.get(`${page.content.collection}:${page.content.id}`);
@@ -577,7 +632,8 @@ const plugin: SandboxedPlugin = {
 							collection: queryCollection,
 							id: queryId,
 							status: item.status,
-							seoPanelEnabled: item.seo !== undefined,
+							seoPanelEnabled:
+								item.seo !== undefined || (await seoPanelSupported(ctx, queryCollection)),
 							// Panel text only — the fallback copy is intentionally not
 							// exposed here; it belongs to the page:metadata channel.
 							seoDescription: item.seo?.description ?? null,

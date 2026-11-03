@@ -115,6 +115,17 @@ async function fallbackDescription(collection: string, id: string): Promise<stri
 	return record?.description ?? null;
 }
 
+/**
+ * The description a reader can actually see: the panel text when it carries
+ * one, otherwise the plugin's fallback copy. An empty panel value is not a
+ * description, so it must not mask the fallback channel.
+ */
+async function visibleDescription(collection: string, id: string): Promise<string | null> {
+	const panel = (await pluginView(collection, id))?.seoDescription;
+	if (panel != null && panel.trim() !== "") return panel;
+	return (await fallbackDescription(collection, id)) ?? null;
+}
+
 /** Read the newest audit note outcome for an entry, by the note's own timestamp. */
 async function latestOutcome(id: string): Promise<string | null> {
 	const audit = await host!.inspect.storage.list<{ contentId: string; outcome: string; at?: string }>("audit");
@@ -215,6 +226,101 @@ describe("publish lifecycle: description generation", () => {
 
 		expect(host!.http.requests()).toHaveLength(0);
 		expect(await latestOutcome(id)).toBe("seo-disabled");
+		const diagnostics = (await host!.transport.invokeRoute("diagnostics", {
+			collection: "notes",
+			id,
+		})) as { entry?: { seoPanelEnabled?: boolean } };
+		expect(diagnostics.entry?.seoPanelEnabled).toBe(false);
+	});
+});
+
+describe("SEO panel availability", () => {
+	it("generates for an entry that has no saved SEO row", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("P".repeat(90)));
+		// No SEO row exists for this entry, so the host hands the plugin no `seo`
+		// block. That is the shape that used to be read as "panel disabled" and
+		// skipped without ever reaching the endpoint.
+		const id = await createArticle({
+			title: "Migrated post",
+			body: "Body text from a migrated post.".repeat(25),
+		});
+		await publishArticle(id);
+
+		expect(host!.http.requests()).toHaveLength(1);
+		const view = await pluginView("articles", id);
+		expect(await visibleDescription("articles", id)).toBe("P".repeat(90));
+		expect(await latestOutcome(id)).not.toBe("seo-disabled");
+		expect(view?.seoPanelEnabled).toBe(true);
+	});
+
+	it("generates when the SEO row exists with an empty description", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("E".repeat(90)));
+		const id = await createArticle(
+			{ title: "Empty panel", body: "Body text for an empty panel.".repeat(25) },
+			{ description: "" },
+		);
+		await publishArticle(id);
+
+		expect(host!.http.requests()).toHaveLength(1);
+		expect(await visibleDescription("articles", id)).toBe("E".repeat(90));
+
+		// A saved SEO row whose description is empty is not a description, so it
+		// must not silence the only channel that can deliver the generated text
+		// on a runner where the SEO-panel write is rejected by the host bridge.
+		const contributions = (await host!.transport.invokeHook("page:metadata", {
+			page: {
+				url: "https://plugin.test/articles/empty-panel",
+				path: "/articles/empty-panel",
+				locale: "en",
+				kind: "content",
+				pageType: "articles",
+				title: "Empty panel",
+				description: "",
+				canonical: null,
+				image: null,
+				content: { collection: "articles", id, slug: null },
+			},
+		})) as Array<{ kind: string; name?: string; content?: string }> | null;
+		expect(contributions).toEqual([
+			{ kind: "meta", name: "description", content: "E".repeat(90) },
+		]);
+	});
+
+	it("leaves a description the SEO row already carries untouched", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("U".repeat(90)));
+		const id = await createArticle(
+			{ title: "Already written", body: "Body text that is already described.".repeat(25) },
+			{ description: "Written by the editor." },
+		);
+		await publishArticle(id);
+
+		expect(host!.http.requests()).toHaveLength(0);
+		expect((await pluginView("articles", id))?.seoDescription).toBe("Written by the editor.");
+		expect(await latestOutcome(id)).toBe("manual-description");
+	});
+
+	it("keeps a description saved while the publish is being processed", async () => {
+		await configureEndpoint();
+		await host!.http.respond(ENDPOINT, completion("Z".repeat(90)));
+		const id = await createArticle({
+			title: "Edited mid-publish",
+			body: "Body text edited while publishing.".repeat(25),
+		});
+		const publish = await host!.actions.content.publish("articles", id);
+		if (!publish.success) throw new Error("publish failed");
+		// The editor's own text lands before the deferred hook gets to read the
+		// entry, so publishing must not bill a request that overwrites it.
+		await host!.actions.content.update("articles", id, {
+			seo: { description: "Saved during the publish." },
+		});
+		await host!.waitForDeferredTasks();
+
+		expect(host!.http.requests()).toHaveLength(0);
+		expect((await pluginView("articles", id))?.seoDescription).toBe("Saved during the publish.");
+		expect(await latestOutcome(id)).toBe("manual-description");
 	});
 });
 

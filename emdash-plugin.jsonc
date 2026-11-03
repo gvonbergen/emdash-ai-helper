@@ -14,9 +14,12 @@
 	// Trust contract.
 	//   content:read  - read the published entry, its locale, and its SEO panel.
 	//   content:write - save the generated description into the SEO panel.
+	//   schema:read   - read the collection flag that says whether the SEO panel
+	//                   exists, so an entry with no SEO row is not mistaken for
+	//                   a collection without SEO support.
 	//   network:request - call the configured endpoint, restricted to allowedHosts.
 	// No hook-policy capability is declared: this plugin never blocks a publish.
-	"capabilities": ["content:read", "content:write", "network:request"],
+	"capabilities": ["content:read", "content:write", "schema:read", "network:request"],
 
 	// OpenAI-compatible chat-completions providers. EmDash enforces this list
 	// at the network boundary; the plugin validates the configured endpoint

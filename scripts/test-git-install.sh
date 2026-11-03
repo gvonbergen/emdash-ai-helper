@@ -95,7 +95,7 @@ assert.equal(descriptor.id, "emdash-ai-helper");
 assert.equal(descriptor.entrypoint, "emdash-ai-helper/sandbox");
 assert.deepEqual(
 	new Set(descriptor.capabilities),
-	new Set(["content:read", "content:write", "network:request"]),
+	new Set(["content:read", "content:write", "schema:read", "network:request"]),
 );
 const runtime = await import("emdash-ai-helper/sandbox");
 const plugin = runtime.default;

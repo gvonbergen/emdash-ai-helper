@@ -4,6 +4,31 @@ All notable changes to this package are documented here. The package is
 distributed as a private git dependency (see `docs/release.md`); releases are
 git tags.
 
+## Unreleased
+
+- Fixed the publish gate that skipped generation for every entry without a
+  saved SEO row. EmDash returns an entry's `seo` block only when that entry
+  already has a SEO row, so the old `seo === undefined` check read migrated
+  posts and brand-new drafts as "SEO panel disabled" and never called the
+  endpoint. A missing block is now read as an empty description and the
+  collection's `hasSeo` schema flag decides, so entries with no row generate
+  while collections genuinely without SEO keep the `seo-disabled` diagnostic.
+  Manual-description precedence, the pre-write re-read, the duplicate-call
+  guard, the retry budget, the diagnostics route, and every existing skip
+  reason are unchanged; the canonical target stays the panel's meta
+  description.
+- The `page:metadata` fallback channel no longer silences itself on an empty
+  SEO row. It fired only when the page description was `null`, so an entry that
+  already had a SEO row carrying `""` — the shape a generated description lands
+  on when the sandbox bridge rejects the panel write — swallowed the generated
+  text: it was billed, stored, and never rendered. An empty panel description is
+  now treated as absent, so the fallback tag fires, while real site- and
+  editor-authored text still wins.
+- The manifest declares the read-only `schema:read` capability to read that
+  flag. Per `docs/release.md` a changed trust contract is a minor bump, so the
+  consumer reinstalls and re-consents the manifest before the gate takes
+  effect.
+
 ## 0.3.0
 
 - Generation guards and `running` claims older than five minutes are treated as
