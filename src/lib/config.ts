@@ -12,6 +12,9 @@
  * `{ choices: [{ message: { content } }] }`.
  */
 
+/** Generate by default when the administrator has not saved the flag. */
+export const DEFAULT_ENABLED = true;
+
 /** Endpoint used when the administrator has not set one. */
 export const DEFAULT_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
@@ -134,37 +137,56 @@ export function normalizeEndpoint(rawEndpoint: string): { url: URL } | { issue: 
 }
 
 /**
+ * The settings interface `resolveConfig` reads from. EmDash 1.4's
+ * `SettingsAccess` satisfies it: `list()` returns every saved setting of
+ * this plugin in a single call, prefix-scoped to the plugin and with secret
+ * fields decrypted - the identical privilege a per-key `get` carries, so the
+ * platform's secret redaction applies to the batch read the same way.
+ */
+export type SettingsSource = {
+	list(prefix?: string): Promise<Array<{ key: string; value: unknown }>>;
+};
+
+/**
  * Resolve the plugin's settings into a usable endpoint configuration.
+ *
+ * Reads the settings at most once per invocation: a single `list()` call
+ * whose result is kept in a local map for the duration of this call only.
+ * Unsaved or blank optional keys fall back to the local defaults above, and
+ * the required token, which has no default, reports `TOKEN_MISSING` as a
+ * clear setup error. There is deliberately no per-key `get` fallback - the
+ * batch is the read - and no cache above this invocation: the single
+ * snapshot is atomic against a concurrent admin save, while a cross-request
+ * cache would serve stale configuration, including a rotated token, to
+ * unrelated requests with no invalidation available.
  *
  * The secret token is returned only to the caller that performs the request;
  * it is never written to storage, logs, routes, or diagnostics.
  */
-export async function resolveConfig(settings: {
-	get<T>(key: string): Promise<T | null>;
-}): Promise<ResolvedConfig> {
-	const enabled = await settings.get<boolean>("enabled");
+export async function resolveConfig(settings: SettingsSource): Promise<ResolvedConfig> {
+	const values = new Map<string, unknown>();
+	for (const entry of await settings.list()) values.set(entry.key, entry.value);
+
+	const enabled = values.get("enabled") ?? DEFAULT_ENABLED;
 	if (enabled === false) return { ok: false, issue: "ENDPOINT_MISSING" };
 
-	const endpointSetting = readString(
-		await settings.get<string>("endpoint"),
-		DEFAULT_ENDPOINT,
-	);
+	const endpointSetting = readString(values.get("endpoint"), DEFAULT_ENDPOINT);
 	const normalized = normalizeEndpoint(endpointSetting);
 	if ("issue" in normalized) return { ok: false, issue: normalized.issue };
 
-	const model = readString(await settings.get<string>("model"), DEFAULT_MODEL);
-	const apiKey = await settings.get<string>("apiKey");
+	const model = readString(values.get("model"), DEFAULT_MODEL);
+	const apiKey = values.get("apiKey");
 	if (typeof apiKey !== "string" || apiKey.trim() === "") {
 		return { ok: false, issue: "TOKEN_MISSING" };
 	}
 
 	const minLength = clamp(
-		readInteger(await settings.get<number>("minLength"), DEFAULT_MIN_LENGTH),
+		readInteger(values.get("minLength"), DEFAULT_MIN_LENGTH),
 		MIN_LENGTH_FLOOR,
 		DEFAULT_MAX_LENGTH,
 	);
 	const maxLength = clamp(
-		readInteger(await settings.get<number>("maxLength"), DEFAULT_MAX_LENGTH),
+		readInteger(values.get("maxLength"), DEFAULT_MAX_LENGTH),
 		minLength,
 		MAX_LENGTH_CEILING,
 	);
@@ -179,12 +201,12 @@ export async function resolveConfig(settings: {
 			minLength,
 			maxLength,
 			timeoutMs: clamp(
-				readInteger(await settings.get<number>("timeoutMs"), DEFAULT_TIMEOUT_MS),
+				readInteger(values.get("timeoutMs"), DEFAULT_TIMEOUT_MS),
 				TIMEOUT_FLOOR,
 				TIMEOUT_CEILING,
 			),
 			maxAttempts: clamp(
-				readInteger(await settings.get<number>("maxAttempts"), DEFAULT_MAX_ATTEMPTS),
+				readInteger(values.get("maxAttempts"), DEFAULT_MAX_ATTEMPTS),
 				ATTEMPTS_FLOOR,
 				ATTEMPTS_CEILING,
 			),

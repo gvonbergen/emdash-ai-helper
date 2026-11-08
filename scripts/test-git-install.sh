@@ -110,7 +110,7 @@ let auditOutcome;
 await publishHook.handler(
 	{ collection: "posts", content: { id: "entry-1" } },
 	{
-		settings: { get: async () => null },
+		settings: { list: async () => [] },
 		storage: {
 			audit: {
 				put: async (_id, record) => {
@@ -137,7 +137,7 @@ for (const [name, methods] of [
 const diagnostics = await plugin.routes.diagnostics.handler(
 	{ input: {} },
 	{
-		settings: { get: async () => null },
+		settings: { list: async () => [] },
 		storage: {
 			generations: { query: async () => ({ items: [], hasMore: false }) },
 		},
@@ -149,7 +149,7 @@ assert.deepEqual(diagnostics.recent, []);
 
 const probe = await plugin.routes["test-endpoint"].handler(
 	{},
-	{ settings: { get: async () => null } },
+	{ settings: { list: async () => [] } },
 );
 assert.equal(probe.ok, false);
 

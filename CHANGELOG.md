@@ -6,6 +6,17 @@ git tags.
 
 ## Unreleased
 
+- The publish hook, the `diagnostics` route, and the `test-endpoint` probe now
+  each resolve their settings with a single `settings.list()` batch read per
+  invocation instead of eight per-key `settings.get` reads. The batch is a
+  per-invocation local snapshot with no per-key fallback and no cache above
+  the call, so a concurrent admin save lands wholly before or after the read
+  rather than tearing one resolution into a mixed configuration. Unsaved or
+  blank optional keys still fall
+  back to the same local defaults, a missing token still reports
+  `TOKEN_MISSING`, and endpoint validation, secret handling, the manual-
+  description-only behavior, guards, retries, and duplicate suppression are
+  unchanged.
 - Fixed the publish gate that skipped generation for every entry without a
   saved SEO row. EmDash returns an entry's `seo` block only when that entry
   already has a SEO row, so the old `seo === undefined` check read migrated
