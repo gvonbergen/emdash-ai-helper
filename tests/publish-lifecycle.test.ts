@@ -537,6 +537,44 @@ describe("configuration handling", () => {
 		await publishArticle(id);
 		expect(host!.http.requests()).toHaveLength(0);
 	});
+
+	it("generates from local defaults when only the token is saved", async () => {
+		// Partial save: endpoint, model, and the numeric tuning keys are unsaved, so
+		// the single batch read must resolve them from the local defaults, not from
+		// per-key fallbacks.
+		await host!.actions.plugin.updateSettings({ apiKey: TOKEN });
+		const summary = "A concise, fact-grounded summary of the article for search result snippets.";
+		await host!.http.respond(ENDPOINT, completion(summary));
+		const id = await createArticle({ title: "Partial config", body: "Body text.".repeat(30) });
+		await publishArticle(id);
+
+		const view = await pluginView("articles", id);
+		const generated = view?.seoDescription ?? (await fallbackDescription("articles", id));
+		expect(generated).toBe(summary);
+
+		const requests = host!.http.requests();
+		expect(requests).toHaveLength(1);
+		expect(requests[0]?.url).toBe(ENDPOINT);
+		expect(requests[0]?.headers["authorization"]).toBe(`Bearer ${TOKEN}`);
+		const body = JSON.parse(new TextDecoder().decode(requests[0]!.body)) as {
+			model: string;
+		};
+		expect(body.model).toBe("gpt-4o-mini");
+	});
+
+	it("skips with a clear setup error when no settings were ever saved", async () => {
+		const id = await createArticle({ title: "Unsaved config", body: "Body text.".repeat(30) });
+		await publishArticle(id);
+		expect(host!.http.requests()).toHaveLength(0);
+		expect(await latestOutcome(id)).toBe("config:TOKEN_MISSING");
+
+		const diagnostics = (await host!.transport.invokeRoute("diagnostics")) as {
+			configured: boolean;
+			issue: string | null;
+		};
+		expect(diagnostics.configured).toBe(false);
+		expect(diagnostics.issue).toBe("TOKEN_MISSING");
+	});
 });
 
 describe("admin routes", () => {
